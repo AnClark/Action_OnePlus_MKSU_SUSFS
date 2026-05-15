@@ -133,7 +133,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt update && sudo apt upgrade -y
+          sudo apt update && apt upgrade -y
           sudo apt install -y python3 git curl
 
       - name: Show selected inputs debug
@@ -169,7 +169,7 @@ jobs:
           rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
           rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
 
-      # 删除 -dirty 后缀
+      # Delete -dirty suffix
       - name: Force remove -dirty suffix
         run: |
           cd kernel_workspace/kernel_platform
@@ -180,7 +180,7 @@ jobs:
           git add -A
           git commit -m "Force remove -dirty suffix from kernel version"
 
-      # 添加 SukiSU Ultra
+      # Add SukiSU Ultra
       - name: Add KernelSU-SukiSU Ultra
         run: |
           cd kernel_workspace/kernel_platform
@@ -191,8 +191,156 @@ jobs:
           export KSU_VERSION=$KSU_VERSION
           sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
 
+      # ===== FIX 1 (CRITICAL): Inject SUSFS Kconfig definitions into SukiSU Ultra =====
+      # SukiSU Ultra's kernel/Kconfig does not define CONFIG_KSU_SUSFS_* options.
+      # Without these definitions, all CONFIG_KSU_SUSFS_* entries in gki_defconfig
+      # are silently discarded by the kernel configuration system, causing
+      # "ISO C99 forbids implicit declaration" errors during compilation.
+      # ============================================================================
+      - name: Inject SUSFS Kconfig into SukiSU
+        run: |
+          set -euo pipefail
+          KCONFIG="kernel_workspace/kernel_platform/KernelSU/kernel/Kconfig"
+          echo "Checking SukiSU Kconfig for SUSFS definitions..."
+
+          if grep -q "config KSU_SUSFS" "$KCONFIG" 2>/dev/null; then
+            echo "SUSFS Kconfig already present, skipping injection."
+            exit 0
+          fi
+
+          echo "Injecting SUSFS Kconfig menu into SukiSU..."
+
+          # Build the SUSFS Kconfig fragment using printf to avoid YAML heredoc issues.
+          # Note: Kconfig accepts space-based indentation; we avoid tabs entirely.
+          SUSFS_FRAG=/tmp/susfs_kconfig_fragment
+          printf '%s\n' \
+            '' \
+            'menu "KernelSU - SUSFS"' \
+            '' \
+            'config KSU_SUSFS' \
+            '    bool "KernelSU addon - SUSFS"' \
+            '    depends on KSU' \
+            '    depends on THREAD_INFO_IN_TASK' \
+            '    default y' \
+            '    help' \
+            '      Patch and Enable SUSFS to kernel with KernelSU.' \
+            '' \
+            'config KSU_SUSFS_HAS_MAGIC_MOUNT' \
+            '    bool "Enable magic mount support"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Enable magic mount support for SUSFS.' \
+            '' \
+            'config KSU_SUSFS_SUS_PATH' \
+            '    bool "Enable to hide suspicious path"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Allow hiding the user-defined path and all its sub-paths' \
+            '      from various system calls.' \
+            '' \
+            'config KSU_SUSFS_SUS_MOUNT' \
+            '    bool "Enable to hide suspicious mounts"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Automatically assign fake mnt_id and fake mnt_group_id for' \
+            '      mounts mounted by ksu process.' \
+            '' \
+            'config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT' \
+            '    bool "Auto add SUS KSU default mount"' \
+            '    depends on KSU_SUSFS_SUS_MOUNT' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT' \
+            '    bool "Auto add SUS bind mount"' \
+            '    depends on KSU_SUSFS_SUS_MOUNT' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_SUS_KSTAT' \
+            '    bool "Enable to spoof suspicious kstat"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Allow spoofing the kstat of user-defined file/directory.' \
+            '' \
+            'config KSU_SUSFS_SUS_OVERLAYFS' \
+            '    bool "Enable SUS overlayfs"' \
+            '    depends on KSU_SUSFS' \
+            '    default n' \
+            '' \
+            'config KSU_SUSFS_TRY_UMOUNT' \
+            '    bool "Enable to try umount"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT' \
+            '    bool "Auto add try umount for bind mount"' \
+            '    depends on KSU_SUSFS_TRY_UMOUNT' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_SPOOF_UNAME' \
+            '    bool "Enable to spoof uname"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Allow spoofing the string returned by uname syscall.' \
+            '' \
+            'config KSU_SUSFS_ENABLE_LOG' \
+            '    bool "Enable logging susfs log to kernel"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS' \
+            '    bool "Enable to automatically hide ksu and susfs symbols"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '    help' \
+            '      Automatically hide ksu and susfs symbols from /proc/kallsyms.' \
+            '' \
+            'config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG' \
+            '    bool "Enable to spoof /proc/bootconfig or /proc/cmdline"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '' \
+            'config KSU_SUSFS_OPEN_REDIRECT' \
+            '    bool "Enable to redirect a path to be opened with another path"' \
+            '    depends on KSU_SUSFS' \
+            '    default y' \
+            '' \
+            'endmenu' \
+            > "$SUSFS_FRAG"
+
+          # Insert the fragment before the last "endmenu" in Kconfig.
+          # SukiSU's Kconfig has one top-level "menu KernelSU ... endmenu" block.
+          # We find the line number of the last "endmenu" and split the file there.
+          ENDMENU_LINE=$(grep -n "^endmenu$" "$KCONFIG" | tail -n1 | cut -d: -f1)
+          if [ -n "$ENDMENU_LINE" ]; then
+            # Output everything before the last endmenu
+            head -n $((ENDMENU_LINE - 1)) "$KCONFIG" > /tmp/kconfig_tmp
+            # Append the SUSFS fragment
+            cat "$SUSFS_FRAG" >> /tmp/kconfig_tmp
+            echo "" >> /tmp/kconfig_tmp
+            # Append the last endmenu and anything after it
+            tail -n +"$ENDMENU_LINE" "$KCONFIG" >> /tmp/kconfig_tmp
+            mv /tmp/kconfig_tmp "$KCONFIG"
+          else
+            echo "::error::未在 Kconfig 中找到 endmenu 标记！"
+            exit 1
+          fi
+
+          if grep -q "config KSU_SUSFS" "$KCONFIG"; then
+            echo "SUSFS Kconfig injected successfully."
+          else
+            echo "::error::Failed to inject SUSFS Kconfig!"
+            exit 1
+          fi
+
+      # ===== FIX 2 (CRITICAL): Remove || true, add android15-6.6 specific fixes =====
       - name: Apply Patches SukiSU Ultra
         run: |
+          set -euo pipefail
           cd kernel_workspace
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -211,11 +359,83 @@ jobs:
           fi
 
           cd ./common
-          patch -p1 < 50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch || true
+
+          ANDROID_VER="${{ github.event.inputs.ANDROID_VERSION }}"
+          KERNEL_VER="${{ github.event.inputs.KERNEL_VERSION }}"
+          FAKE_PATCHED=0
+
+          # ===== android15-6.6 specific pre-fixes =====
+          # The SUSFS patch for android15-6.6 may have context mismatches.
+          # These pre-fixes inject placeholder code so the patch can apply,
+          # then we revert the placeholders after patching.
+          if [ "$ANDROID_VER" = "android15" ] && [ "$KERNEL_VER" = "6.6" ]; then
+            echo "正在为 android15-6.6 应用预修复..."
+
+            # Fix A: fs/namespace.c - add missing trace/hooks/fs.h include
+            if ! grep -qxF '#include <trace/hooks/fs.h>' ./fs/namespace.c; then
+              if grep -q '#include <trace/hooks/blk.h>' ./fs/namespace.c; then
+                sed -i '/#include <trace\/hooks\/blk.h>/a #include <trace\/hooks\/fs.h>' ./fs/namespace.c
+                echo "  [OK] 已添加 #include <trace/hooks/fs.h> 到 fs/namespace.c"
+              else
+                echo "  [WARN] 未找到 #include <trace/hooks/blk.h>，跳过 namespace.c 修复"
+              fi
+            fi
+
+            # Fix B: fs/proc/task_mmu.c - pre-insert variables that the patch expects
+            if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
+              if grep -q 'int ret = 0, copied = 0;' ./fs/proc/task_mmu.c; then
+                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
+                       -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+                echo "  [OK] 已在 fs/proc/task_mmu.c 预插入占位变量"
+                FAKE_PATCHED=1
+              else
+                echo "  [WARN] 未找到目标上下文，跳过 task_mmu.c 预修复"
+              fi
+            fi
+
+            # Fix C: fs/proc/base.c - add missing dma-buf.h include
+            if ! grep -qxF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+              if grep -q '#include <linux/cpufreq_times.h>' ./fs/proc/base.c; then
+                sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+                echo "  [OK] 已添加 #include <linux/dma-buf.h> 到 fs/proc/base.c"
+              else
+                echo "  [WARN] 未找到 #include <linux/cpufreq_times.h>，跳过 base.c 修复"
+              fi
+            fi
+          fi
+
+          # ===== Apply the SUSFS patch (FAILURE IS NO LONGER SILENCED) =====
+          echo "正在应用 SUSFS 补丁..."
+          if ! patch -p1 < 50_add_susfs_in_gki-$ANDROID_VER-$KERNEL_VER.patch; then
+            echo "::error::SUSFS 补丁应用失败！请检查补丁与内核源码的兼容性。"
+            echo "可能的解决方案："
+            echo "  1. 检查 susfs4ksu 分支 gki-$ANDROID_VER-$KERNEL_VER 是否是最新的"
+            echo "  2. 检查 SukiSU Ultra 的源码是否与当前内核版本兼容"
+            exit 1
+          fi
+          echo "[OK] SUSFS 补丁应用成功"
+
+          # Check for any .rej files (patch conflicts)
+          if find . -name "*.rej" -type f | grep -q .; then
+            echo "::warning::检测到补丁冲突文件(.rej)："
+            find . -name "*.rej" -type f
+          fi
+
+          # ===== Revert android15-6.6 fake patches =====
+          if [ "$FAKE_PATCHED" = "1" ] && [ "$ANDROID_VER" = "android15" ] && [ "$KERNEL_VER" = "6.6" ]; then
+            if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
+              echo "正在撤销 fs/proc/task_mmu.c 的占位变量..."
+              sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
+                     -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+              echo "  [OK] 占位变量已撤销"
+            fi
+          fi
+
           echo "完成"
 
       - name: Apply Hide Stuff Patches
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform/common
           cp ../../SukiSU_patch/69_hide_stuff.patch ./
           echo "正在打隐藏应用补丁"
@@ -223,26 +443,34 @@ jobs:
 
       - name: Apply LZ4KD
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform/common
           if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
             cp ../../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.KERNEL_VERSION }}/lz4kd.patch ./
             echo "正在打lz4kd补丁"
-            patch -p1 -F 3 < lz4kd.patch || true
+            if ! patch -p1 -F 3 < lz4kd.patch; then
+              echo "::warning::LZ4KD 补丁应用失败，继续编译..."
+            fi
             echo '完成LZ4KD补丁'
           fi
 
-      # 配置信息
+      # ===== FIX 3: Configuration Settings =====
+      # Note: CONFIG_KSU_SUSFS_* options are now defined in KernelSU/kernel/Kconfig
+      # (injected by the "Inject SUSFS Kconfig" step above), so these config
+      # entries will be properly recognized by the kernel build system.
       - name: Add Configuration Settings
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform
           CONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
           KERNEL_VERSION="${{ github.event.inputs.KERNEL_VERSION }}"
+          ANDROID_VER="${{ github.event.inputs.ANDROID_VERSION }}"
 
           # SukiSU Ultra config
           echo "CONFIG_KSU=y" >> "$CONFIG_FILE"
           echo "CONFIG_KPM=y" >> "$CONFIG_FILE"
 
-          # SUSFS config
+          # SUSFS config - these will now work because Kconfig defines them
           echo "CONFIG_KSU_SUSFS=y" >> "$CONFIG_FILE"
           echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> "$CONFIG_FILE"
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONFIG_FILE"
@@ -259,12 +487,19 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$CONFIG_FILE"
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$CONFIG_FILE"
 
+          # Also inject to vendor config if it exists (for sm8750/sm8850 mixed build)
+          VENDOR_CONFIG="./msm-kernel/arch/arm64/configs/vendor/${{ github.event.inputs.CPUD }}_perf.config"
+          if [ -f "$VENDOR_CONFIG" ]; then
+            echo "同步 SUSFS 基础配置到 vendor config..."
+            echo "CONFIG_KSU=y" >> "$VENDOR_CONFIG"
+            echo "CONFIG_KSU_SUSFS=y" >> "$VENDOR_CONFIG"
+          fi
+
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-          # LZ4KD配置
+          # LZ4KD config
           if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
-          CONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 
             if [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ]; then
               echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
@@ -298,7 +533,7 @@ jobs:
                 echo "CONFIG_ZSMALLOC=y" >> "msm-kernel/arch/arm64/configs/${{ github.event.inputs.CPUD }}-GKI.config"
                 echo "CONFIG_ZRAM=y" >> "msm-kernel/arch/arm64/configs/${{ github.event.inputs.CPUD }}-GKI.config"
               fi
-              
+
               echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
             elif [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.10" ] || [ "${{ github.event.inputs.KERNEL_VERSION }}" = "5.15" ]; then
               rm "common/android/gki_aarch64_modules"
@@ -317,17 +552,20 @@ jobs:
       - name: Build kernel
         if: ${{ github.event.inputs.CPU == 'sm8650' || github.event.inputs.CPU == 'sm7675' }}
         run: |
+          set -euo pipefail
           cd kernel_workspace
           ./kernel_platform/build_with_bazel.py -t ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
-          
+
       - name: Fallback build kernel
         if: ${{ github.event.inputs.CPU != 'sm8650' && github.event.inputs.CPU != 'sm7675' }}
         run: |
-         cd kernel_workspace
-         LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
+          set -euo pipefail
+          cd kernel_workspace
+          LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ github.event.inputs.CPUD }} ${{ github.event.inputs.BUILD_METHOD }}
 
       - name: Make AnyKernel3
         run: |
+          set -euo pipefail
           git clone https://github.com/Numbersf/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
 
@@ -339,7 +577,7 @@ jobs:
           target1="./AnyKernel3/"
           target2="./kernel_workspace/kernel"
 
-          # 查找 Image 文件
+          # Find Image file
           if find "$dir1" -name "Image" | grep -q "Image"; then
             image_path="$dir1"Image
           elif find "$dir2" -name "Image" | grep -q "Image"; then
@@ -354,7 +592,7 @@ jobs:
             image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
           fi
 
-          # 拷贝 Image
+          # Copy Image
           if [ -n "$image_path" ] && [ -f "$image_path" ]; then
             mkdir -p "$dir1"
             if [ "$(realpath "$image_path")" != "$(realpath "$dir1"Image)" ]; then
@@ -368,12 +606,12 @@ jobs:
             exit 1
           fi
 
-          # 可选复制其它新文件（如果存在）
+          # Copy additional files for sm8750/sm8850
           if [ "${{ github.event.inputs.CPU }}" = "sm8750" ] || [ "${{ github.event.inputs.CPU }}" = "sm8850" ]; then
           for file in dtbo.img system_dlkm.erofs.img vendor_dlkm.img vendor_boot.img; do
             if [ -f "$dir1$file" ]; then
               target_name="$file"
-              # 特殊处理 system_dlkm.erofs.img 的目标名
+              # Rename system_dlkm.erofs.img to system_dlkm.img
               if [ "$file" = "system_dlkm.erofs.img" ]; then
                 target_name="system_dlkm.img"
               fi
@@ -387,6 +625,7 @@ jobs:
       - name: Apply patch_linux and replace Image
         if: ${{ github.event.inputs.KPM == 'true' }}
         run: |
+          set -euo pipefail
           cd /home/runner/work/Action_OnePlus_MKSU_SUSFS/Action_OnePlus_MKSU_SUSFS/kernel_workspace/kernel_platform/out/msm-kernel-${{ github.event.inputs.CPUD }}-${{ github.event.inputs.BUILD_METHOD }}/dist
 
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_linux
@@ -396,10 +635,11 @@ jobs:
           mv oImage Image
           cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
 
-      # 下载 SUSFS 模块（CI）
+      # Download SUSFS Module (CI)
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'true' }}
         run: |
+          set -euo pipefail
           LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | \
             jq -r '.workflow_runs[] | select(.head_branch == "v1.5.2+") | .id' | head -n 1)
@@ -415,10 +655,11 @@ jobs:
           curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs.zip "$ARTIFACT_URL"
           cp ksu_module_susfs.zip ./AnyKernel3/
 
-      # 下载 SUSFS 模块（Release）
+      # Download SUSFS Module (Release)
       - name: Download Latest SUSFS Module from Release
         if: ${{ github.event.inputs.SUSFS_CI == 'false' }}
         run: |
+          set -euo pipefail
           wget https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip
           cp ksu_module_susfs_1.5.2+.zip ./AnyKernel3/
 
@@ -431,8 +672,8 @@ jobs:
         id: feil_clean
         run: |
           clean_feil="${{ github.event.inputs.FEIL }}"
-          clean_feil="${clean_feil%_v}"  # 去掉结尾的 _v（如果有）
-          clean_feil="${clean_feil%_u}"  # 去掉结尾的 _u（如果有）
+          clean_feil="${clean_feil%_v}"  # Remove trailing _v if present
+          clean_feil="${clean_feil%_u}"  # Remove trailing _u if present
           echo "value=$clean_feil" >> $GITHUB_OUTPUT
 
       - name: Upload AnyKernel3
